@@ -1,0 +1,34 @@
+{
+  "name": "recipe-manager",
+  "version": "1.0.0",
+  "description": "",
+  "main": "dist/index.js",
+  "scripts": {
+    "dev": "tsx watch index.ts",
+    "build": "tsc",
+    "start": "node dist/index.js",
+    "typecheck": "tsc --noEmit",
+    "db:health": "tsx --eval \"import('./src/db/database.ts').then(async ({ db }) => { const r = await db.raw('select now()'); console.log('DB OK', r.rows[0]); await db.destroy(); }).catch(async (e) => { console.error('DB FAIL', e.message); process.exit(1); })\"",
+    "knex": "tsx node_modules/knex/bin/cli.js --knexfile knexfile.ts",
+    "ui:install": "npm --prefix src/ui install",
+    "ui:dev": "npm --prefix src/ui run dev",
+    "ui:build": "npm --prefix src/ui run build"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "type": "commonjs",
+  "dependencies": {
+    "dotenv": "^18.0.3",
+    "express": "^5.2.1",
+    "knex": "^3.3.0",
+    "objection": "^3.1.5",
+    "pg": "^8.23.0"
+  },
+  "devDependencies": {
+    "@types/express": "^5.0.6",
+    "@types/node": "^26.6.2",
+    "tsx": "^4.23.15",
+    "typescript": "^7.0.2"
+  }
+}
