@@ -55,14 +55,19 @@ async function resolveTagTypeId(input: CreateTagInput): Promise<number> {
   });
 }
 
-export async function createTag(input: CreateTagInput): Promise<TagWithType> {
-  const name = String(input.name ?? '').trim();
+function validateTagName(input: unknown): string {
+  const name = String(input ?? '').trim();
   if (name.length === 0) {
     throw Object.assign(new Error('Tag name is required'), { statusCode: 400 });
   }
   if (name.length > 50) {
     throw Object.assign(new Error('Tag name must be 50 characters or fewer'), { statusCode: 400 });
   }
+  return name;
+}
+
+export async function createTag(input: CreateTagInput): Promise<TagWithType> {
+  const name = validateTagName(input.name);
   const duplicate = await Tag.query().findOne(raw('lower(name) = lower(?)', [name]));
   if (duplicate) {
     throw Object.assign(new Error(`Tag "${duplicate.name}" already exists`), { statusCode: 409 });
@@ -74,6 +79,42 @@ export async function createTag(input: CreateTagInput): Promise<TagWithType> {
     id: Number(created.id),
     name: created.name,
     tagTypeId,
+    tagType: type?.name ?? '',
+  };
+}
+
+export interface UpdateTagInput extends CreateTagInput {}
+
+export async function updateTag(id: number, input: UpdateTagInput): Promise<TagWithType | undefined> {
+  const existing = await Tag.query().findById(id);
+  if (!existing) return undefined;
+
+  const patch: { name?: string; tagTypeId?: number } = {};
+  if (input.name !== undefined) {
+    const name = validateTagName(input.name);
+    const duplicate = await Tag.query()
+      .findOne(raw('lower(name) = lower(?)', [name]))
+      .whereNot('id', id);
+    if (duplicate) {
+      throw Object.assign(new Error(`Tag "${duplicate.name}" already exists`), { statusCode: 409 });
+    }
+    patch.name = name;
+  }
+  if (
+    (input.tagTypeId !== undefined && input.tagTypeId !== null && input.tagTypeId !== '') ||
+    (input.tagType !== undefined && input.tagType !== null && String(input.tagType).trim() !== '')
+  ) {
+    patch.tagTypeId = await resolveTagTypeId(input);
+  }
+  const updated =
+    Object.keys(patch).length > 0
+      ? await Tag.query().patchAndFetchById(id, patch)
+      : existing;
+  const type = await TagType.query().findById(Number(updated.tagTypeId));
+  return {
+    id: updated.id,
+    name: updated.name,
+    tagTypeId: Number(updated.tagTypeId),
     tagType: type?.name ?? '',
   };
 }

@@ -122,6 +122,8 @@ export const api = {
   listTags: () => request<Tag[]>('/api/tags'),
   createTag: (name: string, tagTypeId: number | string) =>
     request<Tag>('/api/tags', { method: 'POST', body: JSON.stringify({ name, tagTypeId }) }),
+  updateTag: (id: number | string, name: string, tagTypeId: number | string) =>
+    request<Tag>(`/api/tags/${id}`, { method: 'PUT', body: JSON.stringify({ name, tagTypeId }) }),
   getMealPlan: (tags: string) =>
     request<MealPlan>(`/api/meal-plan/weekly?tags=${encodeURIComponent(tags)}`),
   saveMealPlan: (recipeIds: (number | string)[], year?: number, weekNumber?: number) =>

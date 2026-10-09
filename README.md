@@ -42,7 +42,7 @@ Server listens on http://localhost:3000 (override with `PORT` env var).
 - `GET /` → `{ "message": "Recipe Manager API is running" }`
 - `GET /db-health` → DB connectivity + recipe count
 - `GET /api/meal-plan/weekly?tags=Chicken,Beef` → weekly meal plan (recipes + aggregated ingredients)
-- `GET /api/tags` → all tags with their types; `POST /api/tags { name, tagTypeId }` → create a tag
+- `GET /api/tags` → all tags with their types; `POST /api/tags { name, tagTypeId }` → create a tag; `PUT /api/tags/:id` → rename / retype a tag
 
 ## Database
 

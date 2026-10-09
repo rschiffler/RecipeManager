@@ -6,7 +6,7 @@ import { TextInput } from '@astryxdesign/core/TextInput';
 import { Selector } from '@astryxdesign/core/Selector';
 import { Card } from '@astryxdesign/core/Card';
 import { Badge } from '@astryxdesign/core/Badge';
-import { Table, proportional } from '@astryxdesign/core/Table';
+import { Table, pixel, proportional } from '@astryxdesign/core/Table';
 import { Banner } from '@astryxdesign/core/Banner';
 import { EmptyState } from '@astryxdesign/core/EmptyState';
 import { api, type Lookups, type Tag } from '../api';
@@ -28,6 +28,7 @@ export default function TagsPage({
   const [loading, setLoading] = useState(true);
   const [name, setName] = useState('');
   const [tagTypeId, setTagTypeId] = useState('');
+  const [editingId, setEditingId] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
   const [notice, setNotice] = useState<{ status: 'success' | 'error'; title: string } | null>(null);
 
@@ -75,11 +76,49 @@ export default function TagsPage({
     () => [
       { key: 'name', header: 'Tag', width: proportional(2) },
       { key: 'tagType', header: 'Type', width: proportional(1) },
+      {
+        key: 'actions',
+        header: '',
+        width: pixel(90),
+        renderCell: (item: TagRow) => (
+          <Button
+            label={`Edit ${String(item.name)}`}
+            variant="ghost"
+            size="sm"
+            onClick={() => startEdit(String(item.id))}
+          >
+            Edit
+          </Button>
+        ),
+      },
     ],
-    [],
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [tags],
   );
 
-  const addTag = async () => {
+  const startEdit = (id: string) => {
+    const tag = tags.find((t) => String(t.id) === id);
+    if (!tag) return;
+    setEditingId(id);
+    setName(tag.name);
+    const typeId =
+      tag.tagTypeId != null && String(tag.tagTypeId) !== ''
+        ? String(tag.tagTypeId)
+        : String(
+            lookups.tagTypes.find((t) => t.name.toLowerCase() === String(tag.tagType ?? '').toLowerCase())?.id ?? '',
+          );
+    setTagTypeId(typeId);
+    setNotice(null);
+  };
+
+  const cancelEdit = () => {
+    setEditingId(null);
+    setName('');
+    setTagTypeId('');
+    setNotice(null);
+  };
+
+  const saveTag = async () => {
     if (name.trim().length === 0) {
       setNotice({ status: 'error', title: 'Tag name is required.' });
       return;
@@ -90,8 +129,14 @@ export default function TagsPage({
     }
     setSaving(true);
     try {
-      const created = await api.createTag(name.trim(), Number(tagTypeId));
-      setNotice({ status: 'success', title: `Added tag "${created.name}".` });
+      if (editingId == null) {
+        const created = await api.createTag(name.trim(), Number(tagTypeId));
+        setNotice({ status: 'success', title: `Added tag "${created.name}".` });
+      } else {
+        const updated = await api.updateTag(editingId, name.trim(), Number(tagTypeId));
+        setNotice({ status: 'success', title: `Updated tag "${updated.name}".` });
+        setEditingId(null);
+      }
       setName('');
       await refresh();
       onChanged();
@@ -107,8 +152,9 @@ export default function TagsPage({
       <VStack gap={1}>
         <Heading level={1}>Tags</Heading>
         <Text type="body" color="secondary">
-          Protein tags are the primary tag on a recipe; other types are additional tags. New
-          tags become available in the recipe editor immediately.
+          Protein tags are the primary tag on a recipe; other types are additional tags. Add
+          new tags or rename existing ones — changes become available in the recipe editor
+          immediately.
         </Text>
       </VStack>
 
@@ -124,7 +170,7 @@ export default function TagsPage({
       <Card>
         <VStack gap={3}>
           <HStack gap={2} vAlign="center">
-            <Heading level={2}>Add tag</Heading>
+            <Heading level={2}>{editingId == null ? 'Add tag' : 'Edit tag'}</Heading>
             <div style={{ flex: 1 }} />
             <Text type="supporting" color="secondary">
               {tags.length} tags
@@ -145,12 +191,15 @@ export default function TagsPage({
               onChange={(v) => setTagTypeId(v ?? '')}
             />
             <Button
-              label="Add tag"
+              label={editingId == null ? 'Add tag' : 'Save changes'}
               variant="primary"
               isLoading={saving}
               isDisabled={name.trim().length === 0 || tagTypeId === ''}
-              clickAction={() => void addTag()}
+              clickAction={() => void saveTag()}
             />
+            {editingId != null && (
+              <Button label="Cancel" variant="ghost" size="sm" onClick={cancelEdit} />
+            )}
           </HStack>
         </VStack>
       </Card>
