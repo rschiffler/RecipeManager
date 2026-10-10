@@ -81,26 +81,45 @@ async function copyTextToClipboard(text: string): Promise<void> {
 }
 
 export default function MealPlanPage({ lookups }: { lookups: Lookups }) {
-  const [mpSelectedTags, setMpSelectedTags] = useState<string[]>([]);
+  const [mpProteins, setMpProteins] = useState<string[]>([]);
+  const [mpAdditional, setMpAdditional] = useState<string[]>([]);
   const [mpLoading, setMpLoading] = useState(false);
   const [mpSaving, setMpSaving] = useState(false);
   const [mealPlan, setMealPlan] = useState<MealPlan | null>(null);
   const [shoppingCopied, setShoppingCopied] = useState(false);
   const [notice, setNotice] = useState<{ status: 'success' | 'error'; title: string } | null>(null);
 
+  const proteinTypeId = lookups.tagTypes.find((t) => t.name.toLowerCase() === 'protein')?.id;
+  const proteinTags = proteinTypeId == null
+    ? lookups.tags
+    : lookups.tags.filter((t) => String(t.tagTypeId) === String(proteinTypeId));
+  const additionalTags = proteinTypeId == null
+    ? []
+    : lookups.tags.filter((t) => String(t.tagTypeId) !== String(proteinTypeId));
+  const proteinsCapped = mpProteins.length >= 3;
+
   const fetchMealPlan = async () => {
-    if (mpSelectedTags.length === 0) {
-      setNotice({ status: 'error', title: 'Select at least one tag for the meal plan.' });
+    if (mpProteins.length === 0) {
+      setNotice({ status: 'error', title: 'Select at least one protein tag for the meal plan.' });
+      return;
+    }
+    if (mpProteins.length > 3) {
+      setNotice({ status: 'error', title: 'Pick at most 3 protein tags.' });
       return;
     }
     setMpLoading(true);
     try {
-      setMealPlan(await api.getMealPlan(mpSelectedTags.join(',')));
+      setMealPlan(await api.getMealPlan([...mpProteins, ...mpAdditional].join(',')));
     } catch (err) {
       setNotice({ status: 'error', title: err instanceof Error ? err.message : String(err) });
     } finally {
       setMpLoading(false);
     }
+  };
+
+  const clearSelection = () => {
+    setMpProteins([]);
+    setMpAdditional([]);
   };
 
   const unitNameById = useMemo(
@@ -172,47 +191,82 @@ export default function MealPlanPage({ lookups }: { lookups: Lookups }) {
           <VStack gap={2}>
             <HStack gap={2} vAlign="center">
               <Text type="body" weight="bold">
-                Tags
+                Protein tags (select at least one and up to three)
               </Text>
               <Text type="supporting" color="secondary">
-                {mpSelectedTags.length === 0
-                  ? 'No tags selected'
-                  : `${mpSelectedTags.length} selected`}
+                {mpProteins.length === 0 ? 'None selected' : `${mpProteins.length} selected`}
               </Text>
             </HStack>
-            {lookups.tags.length === 0 ? (
+            {proteinTags.length === 0 ? (
               <Text type="body" color="secondary">
-                No tags available.
+                No protein tags available. Add them on the Tags page.
               </Text>
             ) : (
               <ToggleButtonGroup
-                label="Meal plan tags"
+                label="Meal plan protein tags"
                 type="multiple"
-                value={mpSelectedTags}
-                onChange={setMpSelectedTags}
+                value={mpProteins}
+                onChange={setMpProteins}
                 size="sm"
                 xstyle={styles.pillWrap}
               >
-                {lookups.tags.map((t) => (
+                {proteinTags.map((t) => (
+                  <ToggleButton
+                    key={String(t.id)}
+                    value={t.name}
+                    label={t.name}
+                    isDisabled={proteinsCapped && !mpProteins.includes(t.name)}
+                  />
+                ))}
+              </ToggleButtonGroup>
+            )}
+          </VStack>
+          <VStack gap={2}>
+            <HStack gap={2} vAlign="center">
+              <Text type="body" weight="bold">
+                Additional tags (optional)
+              </Text>
+              <Text type="supporting" color="secondary">
+                {mpAdditional.length === 0
+                  ? 'No filter'
+                  : `${mpAdditional.length} selected`}
+              </Text>
+            </HStack>
+            {additionalTags.length === 0 ? (
+              <Text type="body" color="secondary">
+                No additional tags yet. Add them on the Tags page.
+              </Text>
+            ) : (
+              <ToggleButtonGroup
+                label="Meal plan additional tags"
+                type="multiple"
+                value={mpAdditional}
+                onChange={setMpAdditional}
+                size="sm"
+                xstyle={styles.pillWrap}
+              >
+                {additionalTags.map((t) => (
                   <ToggleButton key={String(t.id)} value={t.name} label={t.name} />
                 ))}
               </ToggleButtonGroup>
             )}
-            
+            <Text type="supporting" color="secondary">
+              Each protein gets one recipe; additional tags filter those picks.
+            </Text>
             <HStack gap={2} vAlign="center">
               <Button
                 label="Get plan"
                 isLoading={mpLoading}
-                isDisabled={mpSelectedTags.length === 0}
+                isDisabled={mpProteins.length === 0}
                 clickAction={() => void fetchMealPlan()}
                 variant='primary'
               />
-              {mpSelectedTags.length > 0 && (
+              {(mpProteins.length > 0 || mpAdditional.length > 0) && (
                 <Button
                   label="Clear"
                   variant="ghost"
                   size="sm"
-                  onClick={() => setMpSelectedTags([])}
+                  onClick={clearSelection}
                 />
               )}
             </HStack>
@@ -235,6 +289,14 @@ export default function MealPlanPage({ lookups }: { lookups: Lookups }) {
                 <div style={{ flex: 1 }} />
                
               </HStack>
+              {(mealPlan.additionalTags.length > 0 || mealPlan.unfilteredProteins.length > 0) && (
+                <Text type="supporting" color="secondary">
+                  {mealPlan.additionalTags.length > 0 &&
+                    `Filtered by ${mealPlan.additionalTags.join(', ')}.`}
+                  {mealPlan.unfilteredProteins.length > 0 &&
+                    ` No match for ${mealPlan.unfilteredProteins.join(',')} — showing unfiltered picks for those.`}
+                </Text>
+              )}
 
               <List hasDividers>
                 {mealPlan.recipes.map((r) => (
@@ -245,7 +307,7 @@ export default function MealPlanPage({ lookups }: { lookups: Lookups }) {
                 ))}
               </List>
               <VStack maxWidth={200}>
-               <Button
+                <Button
                   label="Select plan for week"
                   variant="primary"
                   size="sm"
@@ -254,7 +316,7 @@ export default function MealPlanPage({ lookups }: { lookups: Lookups }) {
                   clickAction={() => void saveMealPlanForWeek()}
                  
                 />
-                </VStack>
+              </VStack>
               <HStack gap={2} vAlign="center">
                 <Text type="body" weight="bold">
                   Shopping list

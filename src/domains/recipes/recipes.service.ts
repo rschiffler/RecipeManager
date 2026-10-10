@@ -130,7 +130,25 @@ async function replaceRecipeLinks(
       const ingredientId = await Ingredient.query(trx)
         .findOne(raw('lower(name) = lower(?)', [String(item.name ?? item.id ?? '').trim()]))
         .then(async (found) => {
-          if (found) return Number(found.id);
+          if (found) {
+            // The lookup is case-insensitive, but the stored name wins on
+            // display — so typing "Coconut Milk" would snap back to the
+            // seeded "coconut milk" on reload. Adopt the user's casing
+            // instead (last write wins), unless another row already owns it.
+            const typedName = String(item.name ?? '').trim();
+            if (typedName !== '' && found.name !== typedName) {
+              const exactClash = await Ingredient.query(trx)
+                .where('name', typedName)
+                .whereNot('id', Number(found.id))
+                .first();
+              if (!exactClash) {
+                await Ingredient.query(trx)
+                  .findById(Number(found.id))
+                  .patch({ name: typedName });
+              }
+            }
+            return Number(found.id);
+          }
           if (item.id != null) {
             const byId = await Ingredient.query(trx).findById(Number(item.id));
             if (byId) return Number(byId.id);

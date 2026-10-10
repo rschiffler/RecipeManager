@@ -1,30 +1,41 @@
 // HTTP handlers for /api/meal-plan/weekly: generate (GET) and save (POST) a plan.
 import type { Request, Response } from 'express';
-import {
-  getWeeklyMealPlan,
-  normalizeCount,
-  normalizeTags,
-  saveWeeklyMealPlan,
-} from './meal-plan.service';
+import { getWeeklyMealPlan, normalizeTags, saveWeeklyMealPlan } from './meal-plan.service';
+
+function toStatus(err: unknown): number {
+  if (typeof err === 'object' && err !== null && 'statusCode' in err) {
+    const code = Number((err as { statusCode: unknown }).statusCode);
+    if (Number.isInteger(code) && code >= 400 && code < 600) return code;
+  }
+  return 500;
+}
 
 export async function getWeeklyMealPlanHandler(req: Request, res: Response): Promise<void> {
-  // Accept ?tags=Chicken,Beef and ?tags=Chicken&tags=Beef interchangeably.
+  // Accept ?tags=Chicken,Beef,Freezable and ?tags=Chicken&tags=Beef interchangeably.
+  // 1-3 protein tags required; any number of additional (non-protein) tags filter the picks.
   const tags = normalizeTags(req.query.tags ?? req.query.tag);
-  // Number of recipes to return, default 3. Accepts ?count= or ?limit=.
-  const count = normalizeCount(req.query.count ?? req.query.limit, 3);
 
   if (tags.length === 0) {
     res.status(400).json({
-      error: 'Provide at least one tag, e.g. GET /api/meal-plan/weekly?tags=Chicken,Beef',
+      error: 'Provide 1 to 3 protein tags, e.g. GET /api/meal-plan/weekly?tags=Chicken,Beef',
     });
     return;
   }
 
   try {
-    const { recipes, ingredients } = await getWeeklyMealPlan(tags, count);
-    res.json({ tags, count: recipes.length, recipes, ingredients });
+    const { recipes, ingredients, proteins, additionalTags, unfilteredProteins } =
+      await getWeeklyMealPlan(tags);
+    res.json({
+      tags,
+      proteins,
+      additionalTags,
+      unfilteredProteins,
+      count: recipes.length,
+      recipes,
+      ingredients,
+    });
   } catch (err) {
-    res.status(500).json({ error: err instanceof Error ? err.message : String(err) });
+    res.status(toStatus(err)).json({ error: err instanceof Error ? err.message : String(err) });
   }
 }
 

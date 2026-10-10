@@ -65,6 +65,9 @@ export interface RecipePayload {
 
 export interface MealPlan {
   tags: string[];
+  proteins: string[];
+  additionalTags: string[];
+  unfilteredProteins: string[];
   count: number;
   recipes: Recipe[];
   ingredients: Ingredient[];

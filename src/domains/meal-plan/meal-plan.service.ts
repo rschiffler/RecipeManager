@@ -2,6 +2,7 @@
 // All code for this endpoint lives under src/domains/meal-plan.
 import type Ingredient from '../../models/Ingredient';
 import Recipe from '../../models/Recipe';
+import Tag from '../../models/Tag';
 import WeeklyMealPlan from '../../models/WeeklyMealPlan';
 
 export function normalizeTags(input: unknown): string[] {
@@ -19,13 +20,6 @@ export function normalizeTags(input: unknown): string[] {
         .filter((value) => value.length > 0)
     ),
   ];
-}
-
-export function normalizeCount(input: unknown, fallback = 3): number {
-  const raw = Array.isArray(input) ? input[0] : input;
-  const n = typeof raw === 'number' ? raw : parseInt(String(raw ?? ''), 10);
-  if (!Number.isFinite(n) || n < 1) return fallback;
-  return Math.min(Math.floor(n), 20);
 }
 
 /** Fisher-Yates shuffle (new array, does not mutate input). */
@@ -49,52 +43,102 @@ async function getRecentRecipeIds(limit = 4): Promise<Set<number>> {
 export interface WeeklyMealPlanResult {
   recipes: Recipe[];
   ingredients: Ingredient[];
+  proteins: string[];
+  additionalTags: string[];
+  unfilteredProteins: string[];
 }
 /**
- * Build a weekly meal plan from recipes matching any of the given tags,
- * excluding recipes used in the last 4 meal plans.
- * Returns `count` random recipes by default (override with `count`).
- * Eligible recipes are shuffled with Fisher-Yates on each request.
+ * Build a weekly meal plan: one recipe per protein tag (1 to 3 required),
+ * excluding recipes used in the last 4 meal plans. Eligible recipes are
+ * shuffled with Fisher-Yates on each request, so repeated calls vary.
  *
- * When 3 or more tags are given, returns one recipe per tag instead:
- * each tag contributes a single random recipe (preferring ones not used
- * recently), so the plan covers every requested tag.
+ * Additional (non-protein) tags act as a filter: each picked recipe must
+ * carry all of them. When no recipe matches a protein combined with the
+ * filter, that protein falls back to an unfiltered pick (reported in
+ * `unfilteredProteins`) so the plan still covers every protein.
  *
- * @param tagNames - e.g. ['Chicken', 'Beef']
- * @param count - number of recipes to return (default 3; ignored when 3+ tags are given)
+ * @param tagNames - e.g. ['Chicken', 'Beef', 'Freezable']
  */
-export async function getWeeklyMealPlan(
-  tagNames: string[],
-  count = 3
-): Promise<WeeklyMealPlanResult> {
+export async function getWeeklyMealPlan(tagNames: string[]): Promise<WeeklyMealPlanResult> {
   const tags = normalizeTags(tagNames);
 
-  if (tags.length >= 3) {
-    return getOneRecipePerTag(tags);
+  // Split the requested names into protein vs additional tags via the DB.
+  // Unknown names are ignored.
+  const known = tags.length > 0
+    ? await Tag.query()
+      .select('tags.name')
+      .joinRelated('tagType')
+      .select('tagType.name as tagType')
+      .whereIn('tags.name', tags)
+    : [];
+  const proteins: string[] = [];
+  const additional: string[] = [];
+  for (const requested of tags) {
+    const row = known.find((r) => String(r.name) === requested);
+    if (!row) continue;
+    const typeName = String((row as unknown as { tagType: unknown }).tagType ?? '').toLowerCase();
+    (typeName === 'protein' ? proteins : additional).push(requested);
   }
 
-  // 1. Get all recipes which have any of the requested tags.
+  if (proteins.length === 0) {
+    throw Object.assign(
+      new Error('Provide 1 to 3 protein tags, e.g. GET /api/meal-plan/weekly?tags=Chicken,Beef'),
+      { statusCode: 400 },
+    );
+  }
+  if (proteins.length > 3) {
+    throw Object.assign(new Error('Pick at most 3 protein tags'), { statusCode: 400 });
+  }
+
+  // 1. Get all recipes which have any of the requested protein tags.
   const taggedRecipes = await Recipe.query()
     .distinct('recipes.*')
     .joinRelated('tags')
-    .whereIn('tags.name', tags)
+    .whereIn('tags.name', proteins)
     .orderBy('recipes.id')
     .withGraphFetched('[ingredients, tags]');
 
   // 2. Get the last 4 meal plans and their recipe ids.
   const recentRecipeIds = await getRecentRecipeIds(4);
 
-  // 3. Filter out recipes already used in the last 4 meal plans,
-  // then randomly pick `count` (shuffled each request).
-  const eligible = taggedRecipes.filter(
-    (recipe) => !recentRecipeIds.has(Number(recipe.id))
-  );
-  const recipes = shuffle(eligible).slice(0, Math.max(1, Math.floor(count)));
+  // 3. One random recipe per protein (in protein order): prefer recipes
+  // carrying all additional tags, then unfiltered fresh ones, then anything
+  // unpicked (recent included). Never pick the same recipe twice.
+  const hasAllAdditional = (recipe: Recipe) =>
+    additional.every((name) => (recipe.tags ?? []).some((t) => t.name === name));
+  const excludePicked = (list: Recipe[], pickedIds: Set<number>) =>
+    list.filter((recipe) => !pickedIds.has(Number(recipe.id)));
+  const excludeRecent = (list: Recipe[]) =>
+    list.filter((recipe) => !recentRecipeIds.has(Number(recipe.id)));
+
+  const recipes: Recipe[] = [];
+  const pickedIds = new Set<number>();
+  const unfilteredProteins: string[] = [];
+  for (const protein of proteins) {
+    const withProtein = taggedRecipes.filter((recipe) =>
+      (recipe.tags ?? []).some((t) => t.name === protein),
+    );
+    let pool = excludePicked(excludeRecent(withProtein.filter(hasAllAdditional)), pickedIds);
+    let fellBack = false;
+    if (pool.length === 0 && additional.length > 0) {
+      pool = excludePicked(excludeRecent(withProtein), pickedIds);
+      fellBack = pool.length > 0;
+    }
+    if (pool.length === 0) {
+      pool = excludePicked(withProtein, pickedIds);
+      fellBack = additional.length > 0 && pool.length > 0;
+    }
+    if (pool.length === 0) continue;
+    const [choice] = shuffle(pool);
+    recipes.push(choice);
+    pickedIds.add(Number(choice.id));
+    if (fellBack) unfilteredProteins.push(protein);
+  }
 
   // 4. Collect every ingredient used across the remaining recipes (deduped by id).
   const ingredients = collectIngredients(recipes);
 
-  return { recipes, ingredients };
+  return { recipes, ingredients, proteins, additionalTags: additional, unfilteredProteins };
 }
 
 /** Collect every ingredient used across the given recipes (deduped by id). */
@@ -109,42 +153,6 @@ function collectIngredients(recipes: Recipe[]): Ingredient[] {
     }
   }
   return [...ingredientsById.values()];
-}
-
-/**
- * Pick a single random recipe for each requested tag (in tag order),
- * preferring recipes not used in the last 4 meal plans and not already
- * picked for another tag. Falls back to recently-used recipes for a tag
- * when nothing fresh remains; tags with no recipes at all are skipped.
- */
-async function getOneRecipePerTag(tags: string[]): Promise<WeeklyMealPlanResult> {
-  const taggedRecipes = await Recipe.query()
-    .distinct('recipes.*')
-    .joinRelated('tags')
-    .whereIn('tags.name', tags)
-    .orderBy('recipes.id')
-    .withGraphFetched('[ingredients, tags]');
-
-  const recentRecipeIds = await getRecentRecipeIds(4);
-
-  const recipes: Recipe[] = [];
-  const pickedIds = new Set<number>();
-  for (const tag of tags) {
-    const matching = taggedRecipes.filter((recipe) =>
-      (recipe.tags ?? []).some((t) => t.name === tag)
-    );
-    const fresh = matching.filter(
-      (recipe) => !recentRecipeIds.has(Number(recipe.id)) && !pickedIds.has(Number(recipe.id))
-    );
-    const pool =
-      fresh.length > 0 ? fresh : matching.filter((recipe) => !pickedIds.has(Number(recipe.id)));
-    if (pool.length === 0) continue;
-    const [choice] = shuffle(pool);
-    recipes.push(choice as Recipe);
-    pickedIds.add(Number((choice as Recipe).id));
-  }
-
-  return { recipes, ingredients: collectIngredients(recipes) };
 }
 
 /** ISO-8601 calendar: week containing the Thursday determines year + week number. */
